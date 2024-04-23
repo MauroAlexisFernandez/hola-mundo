@@ -1,2 +1,1 @@
-# hola-mundo
-Mi primer repositorio de GitHub
+# Repositorio de Mauro Alexis Fernández (2024)
