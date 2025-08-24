@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chatbot Bank Marketing Mejorado</title>
+  <!-- Bootstrap para estilos y componentes responsivos -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+     /* Contenedor principal del chat */
+    #chatbox {
+      border: 1px solid #ccc;
+      padding: 15px;
+      height: 350px;
+      overflow-y: scroll; /* Permite desplazamiento vertical */
+      margin-bottom: 15px;
+      background: #f9f9f9;
+      font-family: Arial, sans-serif;
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    /* Burbujas de mensaje */
+    .bubble {
+      max-width: 70%;
+      padding: 10px 15px;
+      border-radius: 20px;
+      word-wrap: break-word;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    /* Estilo de mensajes del bot */
+    .bot {
+      background-color: #0d6efd;
+      color: white;
+      align-self: flex-start;
+      border-bottom-left-radius: 0;
+    }
+    /* Estilo de mensajes del usuario */
+    .user {
+      background-color: #198754;
+      color: white;
+      align-self: flex-end;
+      border-bottom-right-radius: 0;
+    }
+    /* Barra de progreso para mostrar la probabilidad */
+    .progress-bubble {
+      background-color: rgba(255, 255, 255, 0.2);
+      border-radius: 10px;
+      height: 12px;
+      width: 100%;
+      margin-top: 5px;
+      overflow: hidden;
+    }
+    .progress-bar-bubble {
+      height: 100%;
+      width: 0%;
+      transition: width 0.5s ease-in-out;
+    }
+  </style>
+</head>
+<body class="d-flex flex-column min-vh-100">
+<div class="container my-4 flex-grow-1 d-flex flex-column">
+  <h1 class="mb-4 text-center">Chatbot para Predicción de la suscripción a depósitos a plazo</h1>
+  <!-- Área de mensajes -->
+  <div id="chatbox" class="mb-3 flex-grow-1"></div>
+   <!-- Área de entrada dinámica (inputs o selects) -->
+  <div id="inputArea" class="mb-3"></div>
+  <!-- Botón para enviar respuestas -->
+  <div class="d-flex justify-content-center mb-4">
+    <button class="btn btn-primary" onclick="enviarRespuesta()">Enviar</button>
+  </div>
+  <!-- Área para preguntas RAG sobre el modelo -->
+  <div id="ragArea" class="mt-4" style="display: none;">
+    <h3>¿Tienes una pregunta sobre el modelo o el TFM?</h3>
+    <div class="input-group mb-3">
+      <input type="text" id="preguntaRAG" class="form-control" placeholder="Ej: ¿Cuál es el modelo más efectivo?" />
+      <button class="btn btn-secondary" onclick="enviarPreguntaRAG()">Preguntar</button>
+    </div>
+    <div id="respuestaRAG" style="white-space: pre-wrap;"></div>
+    <div id="loadingRAG" class="d-none align-items-center mt-2">
+      <div class="spinner-border spinner-border-sm text-primary me-2" role="status" aria-hidden="true"></div>
+      <span>Cargando respuesta...</span>
+    </div>
+  </div>
+</div>
+<!-- Footer -->
+<footer class="bg-light text-center py-3 mt-auto border-top">
+  <small>Proyecto realizado en la <strong>Universidad Complutense de Madrid</strong></small>
+</footer>
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  /* =======================
+   VARIABLES Y CATEGORÍAS
+   ======================= */
+const variables = [
+  "age","job","marital","education","default","housing","loan","contact",
+  "month","day_of_week","duration","campaign","pdays","previous","poutcome",
+  "emp.var.rate","cons.price.idx","cons.conf.idx","euribor3m","nr.employed"
+];
+
+const categorias = {
+  job:["admin.","blue-collar","entrepreneur","housemaid","management","retired","self-employed","services","student","technician","unemployed","unknown"],
+  marital:["married","single","divorced","unknown"],
+  education:["basic.4y","basic.6y","basic.9y","high.school","illiterate","professional.course","university.degree","unknown"],
+  default:["yes","no","unknown"],
+  housing:["yes","no","unknown"],
+  loan:["yes","no","unknown"],
+  contact:["cellular","telephone","unknown"],
+  month:["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"],
+  day_of_week:["mon","tue","wed","thu","fri"],
+  poutcome:["failure","nonexistent","success"]
+};
+
+const variablesNumericas = [
+  "age","duration","campaign","pdays","previous",
+  "emp.var.rate","cons.price.idx","cons.conf.idx","euribor3m","nr.employed"
+];
+
+let respuestas = {}; // Almacena respuestas del usuario
+let indicePregunta = 0; // Índice de la variable actual a preguntar
+const chatbox = document.getElementById('chatbox');
+const inputArea = document.getElementById('inputArea');
+
+/* =======================
+   FUNCIONES DE INTERFAZ
+   ======================= */
+   // Muestra un mensaje en la burbuja de chat
+function mostrarMensaje(texto, quien){
+  const div = document.createElement('div');
+  div.className = 'bubble ' + (quien==='Bot'?'bot':'user');
+  div.textContent = texto;
+  chatbox.appendChild(div);
+  chatbox.scrollTop = chatbox.scrollHeight;
+}
+// Muestra el input apropiado para la variable actual
+function mostrarInput(){
+  inputArea.innerHTML='';
+  if(indicePregunta>=variables.length) return;
+  const varActual = variables[indicePregunta];
+  mostrarMensaje("Por favor ingresa el dato para " + varActual + ":", "Bot");
+ // Si la variable es categórica: desplegable (select)
+  if(categorias[varActual]){
+    const select=document.createElement('select');
+    select.id='respuestaInput';
+    select.className="form-select";
+    categorias[varActual].forEach(opcion=>{
+      const opt=document.createElement('option');
+      opt.value=opcion;
+      opt.text=opcion;
+      select.appendChild(opt);
+    });
+    inputArea.appendChild(select);
+  }
+  // Si es numérica: input de texto 
+  else {
+    const input=document.createElement('input');
+    input.type='text';
+    input.id='respuestaInput';
+    input.placeholder='Ingresa un número';
+    input.className='form-control';
+    inputArea.appendChild(input);
+  }
+}
+
+/* =======================
+   ENVÍO DE RESPUESTAS
+   ======================= */
+function enviarRespuesta(){
+  const inputElem=document.getElementById('respuestaInput');
+  if(!inputElem) return;
+  let valor=inputElem.value.trim();
+  if(!valor){ alert("Por favor ingresa un valor válido."); return; }
+
+  const varActual = variables[indicePregunta];
+// Validaciones para variables numéricas
+  if(variablesNumericas.includes(varActual)){
+    if(isNaN(valor)){ alert("Debes ingresar un número válido para " + varActual); return; }
+    valor = parseFloat(valor);
+
+    // Reglas específicas por variable
+    if(varActual==="age"){
+      if(valor<17 || valor>110){ alert("La edad debe estar entre 17 y 110 años."); return; }
+    }
+    if(["duration","nr.employed","pdays","previous"].includes(varActual) && valor<0){
+      alert(varActual+" no puede ser menor a 0."); return; }
+    if(varActual==="campaign" && valor<1){ alert("campaign debe ser mayor o igual a 1."); return; }
+  }
+// Guarda respuesta y pasa a la siguiente variable
+  respuestas[varActual]=valor;
+  mostrarMensaje(valor,"Usuario");
+  indicePregunta++;
+  if(indicePregunta<variables.length){ mostrarInput(); }
+  else{
+    mostrarMensaje("Gracias! Estoy procesando tu predicción...","Bot");
+    enviarAlBackend();
+    inputArea.innerHTML='';
+  }
+}
+
+/* =======================
+   LLAMADAS AL BACKEND
+   ======================= */
+// Envía las respuestas al endpoint /predict
+function enviarAlBackend(){
+  fetch('/predict',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(respuestas)
+  })
+  .then(res=>res.json())
+  .then(data=>{
+    if(data.error){ 
+      mostrarMensaje("Error: "+data.error,"Bot"); 
+    } else {
+       // Muestra resultado y probabilidad con barra de progreso
+      const prob=(data.probabilidad*100).toFixed(2);
+      const div=document.createElement('div');
+      div.className='bubble bot';
+      div.innerHTML = "Predicción: "+(data.prediccion===1?"Sí contratará el depósito a plazo":"No contratará el depósito a plazo")+" (Probabilidad: "+prob+"%)";
+
+      const progress=document.createElement('div');
+      progress.className='progress-bubble';
+      const progressBar=document.createElement('div');
+      progressBar.className='progress-bar-bubble';
+      progressBar.style.width = prob + '%';
+
+      // Color según porcentaje
+      if(prob<40){ progressBar.style.backgroundColor='red'; }
+      else if(prob<70){ progressBar.style.backgroundColor='yellow'; progressBar.style.color='black'; }
+      else{ progressBar.style.backgroundColor='green'; }
+
+      progress.appendChild(progressBar);
+      div.appendChild(progress);
+      chatbox.appendChild(div);
+      chatbox.scrollTop = chatbox.scrollHeight;
+      // Activa sección RAG
+      document.getElementById("ragArea").style.display="block";
+    }
+  })
+  .catch(()=>mostrarMensaje("Error de conexión con el servidor","Bot"));
+}
+
+// Envía una pregunta al endpoint /rag_chat
+function enviarPreguntaRAG(){
+  const pregunta=document.getElementById("preguntaRAG").value.trim();
+  if(!pregunta){ alert("Por favor escribe una pregunta."); return; }
+
+  const loadingElem=document.getElementById("loadingRAG");
+  const respuestaElem=document.getElementById("respuestaRAG");
+
+  loadingElem.classList.remove("d-none");
+  respuestaElem.textContent="";
+
+  fetch("/rag_chat",{
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pregunta:pregunta})
+  })
+  .then(res=>res.json())
+  .then(data=>{
+    loadingElem.classList.add("d-none");
+    if(data.error) respuestaElem.textContent="❌ "+data.error;
+    else respuestaElem.textContent="🤖 "+data.respuesta;
+  })
+  .catch(()=>{
+    loadingElem.classList.add("d-none");
+    respuestaElem.textContent="❌ Error de conexión con el servidor.";
+  });
+}
+
+/* Inicia el flujo mostrando la primera pregunta */
+mostrarInput();
+</script>
+</body>
+</html>
